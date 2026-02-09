@@ -1,10 +1,10 @@
-import { MessageSquare, Plus, Trash2, PanelLeftClose, PanelLeft } from "lucide-react";
+import { MessageSquare, Plus, Trash2, PanelLeftClose } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 export interface Conversation {
-  id: string;
+  id: number;
   title: string;
   lastMessage: string;
   createdAt: Date;
@@ -12,10 +12,10 @@ export interface Conversation {
 
 interface ChatSidebarProps {
   conversations: Conversation[];
-  activeConversationId: string | null;
-  onSelectConversation: (id: string) => void;
+  activeConversationId: number | null;
+  onSelectConversation: (id: number) => void;
   onNewConversation: () => void;
-  onDeleteConversation: (id: string) => void;
+  onDeleteConversation: (id: number) => void;
   isOpen: boolean;
   onToggle: () => void;
 }
@@ -31,12 +31,11 @@ const ChatSidebar = ({
 }: ChatSidebarProps) => {
   return (
     <>
-
       {/* Sidebar */}
       <div
         className={cn(
           "fixed left-0 top-0 h-full bg-sidebar-background border-r border-sidebar-border z-40 transition-all duration-300 ease-in-out flex flex-col",
-          isOpen ? "w-72 translate-x-0" : "w-72 -translate-x-full"
+          isOpen ? "w-72 translate-x-0" : "w-72 -translate-x-full md:hidden", // improved mobile behavior
         )}
       >
         {/* Header */}
@@ -48,6 +47,7 @@ const ChatSidebar = ({
               size="icon"
               onClick={onNewConversation}
               className="text-sidebar-primary hover:bg-sidebar-accent"
+              title="New conversation"
             >
               <Plus className="h-5 w-5" />
             </Button>
@@ -55,7 +55,8 @@ const ChatSidebar = ({
               variant="ghost"
               size="icon"
               onClick={onToggle}
-              className="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
+              className="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent md:hidden"
+              title="Close sidebar"
             >
               <PanelLeftClose className="h-5 w-5" />
             </Button>
@@ -70,48 +71,59 @@ const ChatSidebar = ({
                 No conversations yet
               </div>
             ) : (
-              conversations.map((conversation) => (
-                <div
-                  key={conversation.id}
-                  className={cn(
-                    "group relative flex items-center gap-3 px-3 py-3 rounded-lg cursor-pointer transition-all duration-200",
-                    activeConversationId === conversation.id
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "hover:bg-sidebar-accent/50 text-muted-foreground hover:text-sidebar-foreground"
-                  )}
-                  onClick={() => onSelectConversation(conversation.id)}
-                >
-                  <MessageSquare className="h-4 w-4 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">
-                      {conversation.title}
-                    </p>
-                    <p className="text-xs text-muted-foreground truncate">
-                      {conversation.lastMessage}
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteConversation(conversation.id);
-                    }}
+              conversations.map((conversation) => {
+                const isActive = activeConversationId === conversation.id;
+
+                return (
+                  <div
+                    key={conversation.id}
+                    className={cn(
+                      "group relative flex items-center gap-3 px-3 py-3 rounded-lg cursor-pointer transition-all duration-200",
+                      isActive
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                        : "hover:bg-sidebar-accent/60 text-muted-foreground hover:text-sidebar-foreground"
+                    )}
+                    onClick={() => onSelectConversation(conversation.id)}
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))
+                    <MessageSquare className="h-4 w-4 flex-shrink-0 opacity-80" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {conversation.title || "New Chat"}
+                      </p>
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">
+                        {conversation.lastMessage || "No messages yet"}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-7 w-7 transition-opacity",
+                        isActive
+                          ? "opacity-70 hover:opacity-100"
+                          : "opacity-0 group-hover:opacity-70"
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        onDeleteConversation(conversation.id);
+                      }}
+                      title="Delete conversation"
+                    >
+                      <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                    </Button>
+                  </div>
+                );
+              })
             )}
           </div>
         </ScrollArea>
       </div>
 
-      {/* Overlay for mobile */}
+      {/* Mobile overlay */}
       {isOpen && (
         <div
-          className="fixed inset-0 bg-background/80 backdrop-blur-sm z-30 md:hidden"
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-30 md:hidden"
           onClick={onToggle}
         />
       )}

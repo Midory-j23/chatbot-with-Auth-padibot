@@ -1,4 +1,5 @@
-import { useState, useRef, KeyboardEvent } from "react";
+import { useState, useRef } from "react";
+import type { KeyboardEvent } from "react";
 import { Send, Sparkles, ImagePlus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 

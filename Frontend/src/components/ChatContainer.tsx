@@ -1,41 +1,37 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
-import { User, Session } from "@supabase/supabase-js";
 import ChatHeader from "./ChatHeader";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import TypingIndicator from "./TypingIndicator";
 import WelcomeState from "./WelcomeState";
-import ChatSidebar, { Conversation } from "./ChatSidebar";
+import ChatSidebar from "./ChatSidebar";
 import { cn } from "@/lib/utils";
+import { toast } from "@/hooks/use-toast";
 
-interface Message {
-  id: string;
+type Message = {
+  id: string | number;
   content: string;
   isUser: boolean;
-  isNew?: boolean;
   image?: string;
-}
+  created_at?: string;
+};
 
-interface ConversationData {
-  id: string;
-  messages: Message[];
+type Conversation = {
+  id: number;
   title: string;
-  lastMessage: string;
-  createdAt: Date;
-}
+  created_at: string;
+  updated_at: string;
+  last_message_preview?: string;
+};
+
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const ChatContainer = () => {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  const [conversations, setConversations] = useState<ConversationData[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<
-    string | null
-  >(null);
+  const [sessions, setSessions] = useState<Conversation[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -43,37 +39,82 @@ const ChatContainer = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Check auth & load sessions
   useEffect(() => {
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-      if (!session?.user) {
+    const checkAuthAndLoad = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/sessions`, {
+          credentials: "include",
+        });
+
+        if (!res.ok) {
+          if (res.status === 401) {
+            navigate("/auth");
+            return;
+          }
+          throw new Error("Failed to fetch sessions");
+        }
+
+        const data = await res.json();
+        setSessions(data);
+
+        // Auto-select most recent session if exists
+        if (data.length > 0) {
+          setActiveSessionId(data[0].id);
+        }
+      } catch (err) {
+        console.error("Auth/sessions error:", err);
         navigate("/auth");
       }
-    });
+    };
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-      if (!session?.user) {
-        navigate("/auth");
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    checkAuthAndLoad();
   }, [navigate]);
 
-  const scrollToBottom = () => {
+  // Load messages when active session changes
+  useEffect(() => {
+    if (!activeSessionId) {
+      setMessages([]);
+      return;
+    }
+
+    const loadMessages = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/sessions/${activeSessionId}`, {
+          credentials: "include",
+        });
+
+        if (!res.ok) throw new Error("Failed to load conversation");
+
+        const data = await res.json();
+        const formattedMessages = data.messages.map((m: any) => ({
+          id: m.id,
+          content: m.message,
+          isUser: m.sender === "user",
+          created_at: m.created_at,
+        }));
+
+        setMessages(formattedMessages);
+      } catch (err) {
+        console.error("Load messages error:", err);
+        toast({
+          title: "Error",
+          description: "Could not load conversation",
+          variant: "destructive",
+        });
+      }
+    };
+
+    loadMessages();
+  }, [activeSessionId]);
+
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isTyping, isStreaming]);
+  }, [messages, isTyping, isStreaming, scrollToBottom]);
 
   const handleStopStreaming = () => {
     if (abortControllerRef.current) {
@@ -84,10 +125,10 @@ const ChatContainer = () => {
     setIsTyping(false);
   };
 
-  const streamFromServer = async (
+  const streamResponse = async (
     response: Response,
-    messageId: string,
-    conversationId: string
+    tempMessageId: string,
+    sessionId: number
   ) => {
     setIsStreaming(true);
     const reader = response.body?.getReader();
@@ -105,212 +146,194 @@ const ChatContainer = () => {
         if (done) break;
 
         const chunk = decoder.decode(value, { stream: true });
-        fullContent += chunk;
+        // SSE format: data: chunk\n\n
+        const lines = chunk.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const content = line.replace("data: ", "").trim();
+            if (content === "[DONE]" || content === "") continue;
+            fullContent += content;
 
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === messageId ? { ...m, content: fullContent } : m
-          )
-        );
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === tempMessageId ? { ...m, content: fullContent } : m
+              )
+            );
+          }
+        }
       }
-    } catch (error) {
-      if ((error as Error).name === "AbortError") {
-        console.log("Stream cancelled by user");
+    } catch (error: any) {
+      if (error.name === "AbortError") {
+        console.log("Streaming aborted by user");
       } else {
-        throw error;
+        console.error("Streaming error:", error);
       }
     } finally {
       setIsStreaming(false);
-      const finalMessage: Message = {
-        id: messageId,
-        content: fullContent || "پاسخ متوقف شد.",
-        isUser: false,
-        isNew: true,
-      };
-
       setMessages((prev) =>
-        prev.map((m) => (m.id === messageId ? finalMessage : m))
-      );
-
-      // Update conversation with AI response
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.id === conversationId
-            ? {
-                ...c,
-                messages: [
-                  ...c.messages.filter((m) => m.id !== messageId),
-                  finalMessage,
-                ],
-              }
-            : c
+        prev.map((m) =>
+          m.id === tempMessageId
+            ? { ...m, content: fullContent || "Response stopped." }
+            : m
         )
       );
+      scrollToBottom();
     }
   };
 
-  const handleSend = async (message: string, image?: string) => {
-    if (!message.trim() && !image) return;
-
-    // Create new conversation if none active
-    let currentConversationId = activeConversationId;
-    if (!currentConversationId) {
-      const newConversation: ConversationData = {
-        id: `conv-${Date.now()}`,
-        messages: [],
-        title: message.slice(0, 30) + (message.length > 30 ? "..." : ""),
-        lastMessage: message,
-        createdAt: new Date(),
-      };
-      setConversations((prev) => [newConversation, ...prev]);
-      setActiveConversationId(newConversation.id);
-      currentConversationId = newConversation.id;
+  const handleSend = async (content: string, image?: string) => {
+    if (!content.trim() && !image) return;
+    if (!activeSessionId) {
+      // Create new session first
+      await handleNewConversation(content);
+      return;
     }
 
     const userMessage: Message = {
-      id: Date.now().toString(),
-      content: message,
+      id: `temp-${Date.now()}`,
+      content,
       isUser: true,
       image,
     };
 
     setMessages((prev) => [...prev, userMessage]);
     setIsTyping(true);
-
-    // Update conversation's last message
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === currentConversationId
-          ? {
-              ...c,
-              lastMessage: message,
-              messages: [...c.messages, userMessage],
-            }
-          : c
-      )
-    );
+    scrollToBottom();
 
     try {
-      // Create abort controller for cancellation
       abortControllerRef.current = new AbortController();
 
-      // Get conversation history for context (including images)
-      const currentConversation = conversations.find(
-        (c) => c.id === currentConversationId
+      const res = await fetch(
+        `${API_BASE}/api/sessions/${activeSessionId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ message: content, image }),
+          credentials: "include",
+          signal: abortControllerRef.current.signal,
+        }
       );
-      const history =
-        currentConversation?.messages.map((m) => ({
-          role: m.isUser ? "user" : "assistant",
-          content: m.content,
-          image: m.image, // Include image in history
-        })) || [];
 
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message,
-          history,
-          image,
-        }),
-        signal: abortControllerRef.current.signal,
-      });
+      if (!res.ok) {
+        throw new Error(`Server error: ${res.status}`);
+      }
 
-      if (!response.ok) throw new Error("Network error");
-
-      const aiMessageId = `ai-${Date.now()}`;
-
-      setIsTyping(false);
-
-      const aiMessage: Message = {
-        id: aiMessageId,
+      const tempAssistantId = `ai-${Date.now()}`;
+      const assistantPlaceholder: Message = {
+        id: tempAssistantId,
         content: "",
         isUser: false,
-        isNew: false,
       };
 
-      setMessages((prev) => [...prev, aiMessage]);
-
-      await streamFromServer(response, aiMessageId, currentConversationId);
-    } catch (error) {
-      console.error("AI Error:", error);
+      setMessages((prev) => [...prev, assistantPlaceholder]);
       setIsTyping(false);
-      const errorMessage: Message = {
-        id: `error-${Date.now()}`,
-        content: "خطا در ارتباط با سرور یا Ollama.",
-        isUser: false,
-      };
-      setMessages((prev) => [...prev, errorMessage]);
 
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.id === currentConversationId
-            ? { ...c, messages: [...c.messages, errorMessage] }
-            : c
-        )
+      await streamResponse(res, tempAssistantId, activeSessionId);
+
+      // Refresh session list (title may have changed)
+      const sessionsRes = await fetch(`${API_BASE}/api/sessions`, {
+        credentials: "include",
+      });
+      if (sessionsRes.ok) {
+        setSessions(await sessionsRes.json());
+      }
+    } catch (err: any) {
+      console.error("Send message error:", err);
+      setIsTyping(false);
+      setMessages((prev) =>
+        prev.filter((m) => m.id !== `temp-${Date.now()}`) // cleanup failed user msg?
       );
+      toast({
+        title: "Error",
+        description: "Failed to get response",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleNewConversation = async (firstMessage?: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: firstMessage ? firstMessage.slice(0, 40) : "New Chat" }),
+        credentials: "include",
+      });
+
+      if (!res.ok) throw new Error("Failed to create session");
+
+      const newSession = await res.json();
+      setSessions((prev) => [newSession, ...prev]);
+      setActiveSessionId(newSession.id);
+      setMessages([]);
+
+      if (firstMessage) {
+        await handleSend(firstMessage);
+      }
+    } catch (err) {
+      console.error("Create session error:", err);
+      toast({
+        title: "Error",
+        description: "Could not create new conversation",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSelectConversation = (id: number) => {
+    setActiveSessionId(id);
+  };
+
+  const handleDeleteConversation = async (id: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (!res.ok) throw new Error("Delete failed");
+
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      if (activeSessionId === id) {
+        setActiveSessionId(null);
+        setMessages([]);
+      }
+
+      toast({ title: "Conversation deleted" });
+    } catch (err) {
+      console.error("Delete error:", err);
+      toast({
+        title: "Error",
+        description: "Failed to delete conversation",
+        variant: "destructive",
+      });
     }
   };
 
   const handleClearChat = () => {
-    if (activeConversationId) {
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.id === activeConversationId ? { ...c, messages: [] } : c
-        )
-      );
-    }
+    // Optional: you can add a clear endpoint later
+    // For now, just reset UI
     setMessages([]);
-    setIsTyping(false);
-    setIsStreaming(false);
+    toast({ title: "Chat cleared (local only)" });
   };
 
-  const handleNewConversation = () => {
-    setActiveConversationId(null);
-    setMessages([]);
-    setIsTyping(false);
-    setIsStreaming(false);
-  };
-
-  const handleSelectConversation = (id: string) => {
-    const conversation = conversations.find((c) => c.id === id);
-    if (conversation) {
-      setActiveConversationId(id);
-      setMessages(conversation.messages);
-    }
-  };
-
-  const handleDeleteConversation = (id: string) => {
-    setConversations((prev) => prev.filter((c) => c.id !== id));
-    if (activeConversationId === id) {
-      setActiveConversationId(null);
-      setMessages([]);
-    }
-  };
-
-  const sidebarConversations: Conversation[] = conversations.map((c) => ({
-    id: c.id,
-    title: c.title,
-    lastMessage: c.lastMessage,
-    createdAt: c.createdAt,
+  const sidebarConversations = sessions.map((s) => ({
+    id: s.id,
+    title: s.title || "Untitled",
+    lastMessage: s.last_message_preview || "",
+    createdAt: new Date(s.updated_at || s.created_at),
   }));
-
-  if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-background">
-        <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-screen max-h-screen bg-background">
       <ChatSidebar
         conversations={sidebarConversations}
-        activeConversationId={activeConversationId}
-        onSelectConversation={handleSelectConversation}
-        onNewConversation={handleNewConversation}
-        onDeleteConversation={handleDeleteConversation}
+        activeConversationId={activeSessionId}           // ← no .toString()
+        onSelectConversation={handleSelectConversation}   // ← no need for Number()
+        onNewConversation={() => handleNewConversation()}
+        onDeleteConversation={handleDeleteConversation}   // ← no Number()
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
       />
@@ -321,10 +344,6 @@ const ChatContainer = () => {
           sidebarOpen ? "md:ml-72" : "ml-0"
         )}
       >
-        <div className="fixed inset-0 pointer-events-none">
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-gradient-to-b from-primary/5 to-transparent rounded-full blur-3xl" />
-        </div>
-
         <ChatHeader
           onClearChat={handleClearChat}
           messageCount={messages.length}
@@ -335,17 +354,16 @@ const ChatContainer = () => {
 
         <div className="flex-1 overflow-y-auto relative">
           <div className="max-w-4xl mx-auto">
-            {messages.length === 0 ? (
+            {messages.length === 0 && !activeSessionId ? (
               <WelcomeState />
             ) : (
               <div className="py-4">
-                {messages.map((message) => (
+                {messages.map((msg) => (
                   <ChatMessage
-                    key={message.id}
-                    message={message.content}
-                    isUser={message.isUser}
-                    isNew={message.isNew}
-                    image={message.image}
+                    key={msg.id}
+                    message={msg.content}
+                    isUser={msg.isUser}
+                    image={msg.image}
                   />
                 ))}
                 {isTyping && <TypingIndicator />}
@@ -355,7 +373,10 @@ const ChatContainer = () => {
           </div>
         </div>
 
-        <ChatInput onSend={handleSend} disabled={isTyping || isStreaming} />
+        <ChatInput
+          onSend={handleSend}
+          disabled={isTyping || isStreaming || !activeSessionId}
+        />
       </div>
     </div>
   );

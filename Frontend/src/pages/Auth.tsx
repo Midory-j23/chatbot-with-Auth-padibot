@@ -1,12 +1,13 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { Eye, EyeOff, Mail, Lock, Sparkles, Bot } from "lucide-react";
 import { z } from "zod";
+
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const authSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -21,27 +22,12 @@ const Auth = () => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        if (session?.user) {
-          navigate("/");
-        }
-      }
-    );
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        navigate("/");
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [navigate]);
+  console.log("Auth component rendered");
+  console.log("Current API_URL:", API_URL);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     const validation = authSchema.safeParse({ email, password });
     if (!validation.success) {
       toast({
@@ -55,35 +41,44 @@ const Auth = () => {
     setLoading(true);
 
     try {
-      if (isLogin) {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        toast({
-          title: "Welcome back!",
-          description: "You have successfully signed in.",
-        });
-      } else {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: `${window.location.origin}/`,
-          },
-        });
-        if (error) throw error;
-        toast({
-          title: "Account created!",
-          description: "Welcome to the AI Chatbot.",
-        });
+      const endpoint = isLogin ? "/login" : "/register";
+      const body = isLogin
+        ? new URLSearchParams({ username: email, password })
+        : { email, password };
+
+      const headers: HeadersInit = {
+        "Content-Type": isLogin ? "application/x-www-form-urlencoded" : "application/json",
+      };
+
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method: "POST",
+        headers,
+        body: isLogin
+          ? body.toString()
+          : JSON.stringify(body),
+        credentials: "include", // ← VERY IMPORTANT — sends & receives cookies
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Authentication failed");
       }
+
+      toast({
+        title: isLogin ? "Welcome back!" : "Account created!",
+        description: isLogin
+          ? "You have successfully signed in."
+          : "Welcome to the AI Chatbot.",
+      });
+
+      navigate("/");
     } catch (error: any) {
       let message = error.message;
-      if (error.message.includes("User already registered")) {
+
+      if (message.includes("already registered")) {
         message = "This email is already registered. Please sign in instead.";
       }
+
       toast({
         title: "Error",
         description: message,
@@ -102,9 +97,9 @@ const Auth = () => {
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-3xl animate-pulse" />
         <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-accent/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: "1s" }} />
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-primary/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: "2s" }} />
-        
+
         {/* Grid pattern */}
-        <div 
+        <div
           className="absolute inset-0 opacity-20"
           style={{
             backgroundImage: `linear-gradient(rgba(var(--primary-rgb), 0.1) 1px, transparent 1px),
@@ -112,7 +107,7 @@ const Auth = () => {
             backgroundSize: "50px 50px",
           }}
         />
-        
+
         {/* Animated particles */}
         {[...Array(20)].map((_, i) => (
           <div
