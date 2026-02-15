@@ -1,6 +1,17 @@
+import { useState } from "react";
 import { MessageSquare, Plus, Trash2, PanelLeftClose } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 
 export interface Conversation {
@@ -29,6 +40,29 @@ const ChatSidebar = ({
   isOpen,
   onToggle,
 }: ChatSidebarProps) => {
+  const [conversationToDelete, setConversationToDelete] = useState<number | null>(null);
+
+  const handleDeleteClick = (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setConversationToDelete(id);
+  };
+
+  const handleConfirmDelete = () => {
+    if (conversationToDelete !== null) {
+      onDeleteConversation(conversationToDelete);
+      setConversationToDelete(null);
+    }
+  };
+
+  const handleCancelDelete = () => {
+    setConversationToDelete(null);
+  };
+
+  const pendingTitle = conversationToDelete !== null
+    ? conversations.find((c) => c.id === conversationToDelete)?.title || "this chat"
+    : "";
+
   return (
     <>
       {/* Sidebar */}
@@ -98,19 +132,13 @@ const ChatSidebar = ({
                       variant="ghost"
                       size="icon"
                       className={cn(
-                        "h-7 w-7 transition-opacity",
-                        isActive
-                          ? "opacity-70 hover:opacity-100"
-                          : "opacity-0 group-hover:opacity-70"
+                        "h-7 w-7 shrink-0 transition-opacity",
+                        "opacity-60 hover:opacity-100 hover:text-destructive"
                       )}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        onDeleteConversation(conversation.id);
-                      }}
+                      onClick={(e) => handleDeleteClick(e, conversation.id)}
                       title="Delete conversation"
                     >
-                      <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                      <Trash2 className="h-4 w-4 text-muted-foreground" />
                     </Button>
                   </div>
                 );
@@ -119,6 +147,23 @@ const ChatSidebar = ({
           </div>
         </ScrollArea>
       </div>
+
+      <AlertDialog open={conversationToDelete !== null} onOpenChange={(open) => !open && handleCancelDelete()}>
+        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete &quot;{pendingTitle}&quot; and all its messages. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleCancelDelete}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Mobile overlay */}
       {isOpen && (

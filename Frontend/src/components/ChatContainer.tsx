@@ -128,7 +128,7 @@ const ChatContainer = () => {
   const streamResponse = async (
     response: Response,
     tempMessageId: string,
-    sessionId: number
+    sessionId: number,
   ) => {
     setIsStreaming(true);
     const reader = response.body?.getReader();
@@ -156,8 +156,8 @@ const ChatContainer = () => {
 
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === tempMessageId ? { ...m, content: fullContent } : m
-              )
+                m.id === tempMessageId ? { ...m, content: fullContent } : m,
+              ),
             );
           }
         }
@@ -174,8 +174,8 @@ const ChatContainer = () => {
         prev.map((m) =>
           m.id === tempMessageId
             ? { ...m, content: fullContent || "Response stopped." }
-            : m
-        )
+            : m,
+        ),
       );
       scrollToBottom();
     }
@@ -213,7 +213,7 @@ const ChatContainer = () => {
           body: JSON.stringify({ message: content, image }),
           credentials: "include",
           signal: abortControllerRef.current.signal,
-        }
+        },
       );
 
       if (!res.ok) {
@@ -242,8 +242,8 @@ const ChatContainer = () => {
     } catch (err: any) {
       console.error("Send message error:", err);
       setIsTyping(false);
-      setMessages((prev) =>
-        prev.filter((m) => m.id !== `temp-${Date.now()}`) // cleanup failed user msg?
+      setMessages(
+        (prev) => prev.filter((m) => m.id !== `temp-${Date.now()}`), // cleanup failed user msg?
       );
       toast({
         title: "Error",
@@ -258,7 +258,9 @@ const ChatContainer = () => {
       const res = await fetch(`${API_BASE}/api/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: firstMessage ? firstMessage.slice(0, 40) : "New Chat" }),
+        body: JSON.stringify({
+          title: firstMessage ? firstMessage.slice(0, 40) : "New Chat",
+        }),
         credentials: "include",
       });
 
@@ -330,10 +332,10 @@ const ChatContainer = () => {
     <div className="flex h-screen max-h-screen bg-background">
       <ChatSidebar
         conversations={sidebarConversations}
-        activeConversationId={activeSessionId}           // ← no .toString()
-        onSelectConversation={handleSelectConversation}   // ← no need for Number()
+        activeConversationId={activeSessionId} // ← no .toString()
+        onSelectConversation={handleSelectConversation} // ← no need for Number()
         onNewConversation={() => handleNewConversation()}
-        onDeleteConversation={handleDeleteConversation}   // ← no Number()
+        onDeleteConversation={handleDeleteConversation} // ← no Number()
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
       />
@@ -341,7 +343,7 @@ const ChatContainer = () => {
       <div
         className={cn(
           "flex flex-col flex-1 h-full transition-all duration-300",
-          sidebarOpen ? "md:ml-72" : "ml-0"
+          sidebarOpen ? "md:ml-72" : "ml-0",
         )}
       >
         <ChatHeader
@@ -375,7 +377,8 @@ const ChatContainer = () => {
 
         <ChatInput
           onSend={handleSend}
-          disabled={isTyping || isStreaming || !activeSessionId}
+          // disabled={isTyping || isStreaming || !activeSessionId}   ← remove !activeSessionId
+          disabled={isTyping || isStreaming }
         />
       </div>
     </div>
