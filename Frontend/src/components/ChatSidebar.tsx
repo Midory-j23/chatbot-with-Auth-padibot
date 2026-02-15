@@ -1,6 +1,14 @@
-import { useState } from "react";
-import { MessageSquare, Plus, Trash2, PanelLeftClose } from "lucide-react";
+// ChatSidebar.tsx
+import { useState, useMemo } from "react";
+import {
+  MessageSquare,
+  Plus,
+  Trash2,
+  PanelLeftClose,
+  Search,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   AlertDialog,
@@ -29,6 +37,7 @@ interface ChatSidebarProps {
   onDeleteConversation: (id: number) => void;
   isOpen: boolean;
   onToggle: () => void;
+  userEmail?: string; // ← only email passed from parent
 }
 
 const ChatSidebar = ({
@@ -39,12 +48,25 @@ const ChatSidebar = ({
   onDeleteConversation,
   isOpen,
   onToggle,
+  userEmail = "user@example.com",
 }: ChatSidebarProps) => {
-  const [conversationToDelete, setConversationToDelete] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [conversationToDelete, setConversationToDelete] = useState<
+    number | null
+  >(null);
+
+  const filteredConversations = useMemo(() => {
+    if (!searchQuery.trim()) return conversations;
+    const q = searchQuery.toLowerCase();
+    return conversations.filter(
+      (c) =>
+        c.title.toLowerCase().includes(q) ||
+        (c.lastMessage || "").toLowerCase().includes(q),
+    );
+  }, [conversations, searchQuery]);
 
   const handleDeleteClick = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
-    e.preventDefault();
     setConversationToDelete(id);
   };
 
@@ -55,90 +77,119 @@ const ChatSidebar = ({
     }
   };
 
-  const handleCancelDelete = () => {
-    setConversationToDelete(null);
-  };
-
-  const pendingTitle = conversationToDelete !== null
-    ? conversations.find((c) => c.id === conversationToDelete)?.title || "this chat"
-    : "";
+  const pendingTitle =
+    conversations.find((c) => c.id === conversationToDelete)?.title ||
+    "this chat";
 
   return (
     <>
-      {/* Sidebar */}
       <div
         className={cn(
-          "fixed left-0 top-0 h-full bg-sidebar-background border-r border-sidebar-border z-40 transition-all duration-300 ease-in-out flex flex-col",
-          isOpen ? "w-72 translate-x-0" : "w-72 -translate-x-full md:hidden", // improved mobile behavior
+          "fixed left-0 top-0 h-full bg-gray-950 border-r border-gray-800 z-40 transition-all duration-300 flex flex-col",
+          isOpen ? "w-72 translate-x-0" : "w-72 -translate-x-full md:hidden",
         )}
       >
-        {/* Header */}
-        <div className="p-4 border-b border-sidebar-border flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-sidebar-foreground">Chats</h2>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onNewConversation}
-              className="text-sidebar-primary hover:bg-sidebar-accent"
-              title="New conversation"
-            >
-              <Plus className="h-5 w-5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onToggle}
-              className="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent md:hidden"
-              title="Close sidebar"
-            >
-              <PanelLeftClose className="h-5 w-5" />
-            </Button>
+        {/* Header - New Chat + mobile close */}
+        <div className="p-3 border-b border-gray-800 flex items-center justify-between">
+          <Button
+            variant="ghost"
+            className="flex-1 justify-start gap-2 text-gray-200 hover:bg-gray-800/70 text-base font-medium"
+            onClick={onNewConversation}
+          >
+            <Plus className="h-5 w-5" />
+            New chat
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="md:hidden text-gray-400 hover:text-gray-200"
+            onClick={onToggle}
+          >
+            <PanelLeftClose className="h-5 w-5" />
+          </Button>
+        </div>
+
+        {/* Search bar */}
+        <div className="p-3 border-b border-gray-800">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
+            <Input
+              placeholder="Search chats"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 bg-gray-900 border-gray-700 text-gray-200 placeholder:text-gray-500 focus-visible:ring-gray-700 focus-visible:border-gray-600"
+            />
           </div>
         </div>
 
         {/* Conversations list */}
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">
-            {conversations.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground text-sm">
-                No conversations yet
+            {filteredConversations.length === 0 ? (
+              <div className="px-4 py-10 text-center text-sm text-gray-500">
+                {searchQuery
+                  ? "No matching chats found"
+                  : "No conversations yet"}
               </div>
             ) : (
-              conversations.map((conversation) => {
-                const isActive = activeConversationId === conversation.id;
+              filteredConversations.map((conv) => {
+                const isActive = activeConversationId === conv.id;
 
                 return (
+
                   <div
-                    key={conversation.id}
+                    key={conv.id}
                     className={cn(
-                      "group relative flex items-center gap-3 px-3 py-3 rounded-lg cursor-pointer transition-all duration-200",
+                      "group relative flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors duration-150",
                       isActive
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                        : "hover:bg-sidebar-accent/60 text-muted-foreground hover:text-sidebar-foreground"
+                        ? "bg-gray-800 text-white"
+                        : "hover:bg-gray-800/60 text-gray-300",
                     )}
-                    onClick={() => onSelectConversation(conversation.id)}
+                    onClick={() => onSelectConversation(conv.id)}
                   >
-                    <MessageSquare className="h-4 w-4 flex-shrink-0 opacity-80" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {conversation.title || "New Chat"}
+                    <MessageSquare className="h-4 w-4 opacity-80 flex-shrink-0 mt-0.5" />
+
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      {" "}
+                      {/* ← space-y instead of mt */}
+                      {/* Title - allow wrapping or at least show much more */}
+                      <p
+                        className={cn(
+                          "text-sm font-medium",
+                          // Option A: allow 2 lines max + ellipsis only at the end
+                          "line-clamp-2", // ← most popular fix right now
+                          // Option B: completely remove truncation → text can wrap
+                          // ""                    // ← no truncate / line-clamp at all
+                        )}
+                      >
+                        {conv.title || "New Chat"}
                       </p>
-                      <p className="text-xs text-muted-foreground truncate mt-0.5">
-                        {conversation.lastMessage || "No messages yet"}
+                      {/* Last message preview - usually 1–2 lines max */}
+                      <p
+                        className={cn(
+                          "text-xs text-gray-500",
+                          "line-clamp-2", // ← 2 lines is usually enough for previews
+                          // or "" to allow full wrapping (but can look messy)
+                        )}
+                      >
+                        {conv.lastMessage || "No messages yet"}
                       </p>
                     </div>
+
+                    {/* Delete button - keep it on the right */}
                     <Button
                       variant="ghost"
                       size="icon"
                       className={cn(
-                        "h-7 w-7 shrink-0 transition-opacity",
-                        "opacity-60 hover:opacity-100 hover:text-destructive"
+                        "h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity",
+                        "text-gray-400 hover:text-red-400 hover:bg-red-950/40",
+                        // Important: make sure delete button doesn't push content out
+                        "flex-shrink-0",
                       )}
-                      onClick={(e) => handleDeleteClick(e, conversation.id)}
-                      title="Delete conversation"
+                      onClick={(e) => handleDeleteClick(e, conv.id)}
                     >
-                      <Trash2 className="h-4 w-4 text-muted-foreground" />
+                      <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
                 );
@@ -146,19 +197,33 @@ const ChatSidebar = ({
             )}
           </div>
         </ScrollArea>
+
+        {/* Bottom - only email */}
+        <div className="p-3 border-t border-gray-800 mt-auto bg-gray-950">
+          <div className="text-sm text-gray-400 truncate text-center md:text-left">
+            {userEmail}
+          </div>
+        </div>
       </div>
 
-      <AlertDialog open={conversationToDelete !== null} onOpenChange={(open) => !open && handleCancelDelete()}>
-        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+      {/* Delete confirmation dialog */}
+      <AlertDialog
+        open={conversationToDelete !== null}
+        onOpenChange={(open) => !open && setConversationToDelete(null)}
+      >
+        <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
+            <AlertDialogTitle>Delete chat?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete &quot;{pendingTitle}&quot; and all its messages. This cannot be undone.
+              "{pendingTitle}" and all its messages will be permanently deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleCancelDelete}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleConfirmDelete}
+            >
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -168,7 +233,7 @@ const ChatSidebar = ({
       {/* Mobile overlay */}
       {isOpen && (
         <div
-          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-30 md:hidden"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 md:hidden"
           onClick={onToggle}
         />
       )}
@@ -177,3 +242,8 @@ const ChatSidebar = ({
 };
 
 export default ChatSidebar;
+
+
+
+// git config --global user.name "m.ghasemian"
+// git config --global user.email "mghasemian@padisarco.com"

@@ -24,7 +24,7 @@ type Conversation = {
   updated_at: string;
   last_message_preview?: string;
 };
-
+const userEmail = "mohammad@example.com";
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const ChatContainer = () => {
@@ -338,6 +338,7 @@ const ChatContainer = () => {
         onDeleteConversation={handleDeleteConversation} // ← no Number()
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
+        userEmail={userEmail}
       />
 
       <div
@@ -378,7 +379,7 @@ const ChatContainer = () => {
         <ChatInput
           onSend={handleSend}
           // disabled={isTyping || isStreaming || !activeSessionId}   ← remove !activeSessionId
-          disabled={isTyping || isStreaming }
+          disabled={isTyping || isStreaming}
         />
       </div>
     </div>
