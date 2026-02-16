@@ -129,7 +129,7 @@ const ChatContainer = () => {
   const streamResponse = async (
     response: Response,
     tempMessageId: string,
-    sessionId: number,
+    _sessionId: number,
   ) => {
     setIsStreaming(true);
     const reader = response.body?.getReader();
@@ -182,10 +182,15 @@ const ChatContainer = () => {
     }
   };
 
-  const handleSend = async (content: string, image?: string) => {
+  const handleSend = async (
+    content: string,
+    image?: string,
+    sessionIdOverride?: number | null,
+  ) => {
     if (!content.trim() && !image) return;
-    if (!activeSessionId) {
-      // Create new session first
+    const sessionId = sessionIdOverride ?? activeSessionId;
+    if (!sessionId) {
+      // Create new session first, then send (pass new id so we don't re-enter)
       await handleNewConversation(content);
       return;
     }
@@ -205,7 +210,7 @@ const ChatContainer = () => {
       abortControllerRef.current = new AbortController();
 
       const res = await fetch(
-        `${API_BASE}/api/sessions/${activeSessionId}/messages`,
+        `${API_BASE}/api/sessions/${sessionId}/messages`,
         {
           method: "POST",
           headers: {
@@ -231,7 +236,7 @@ const ChatContainer = () => {
       setMessages((prev) => [...prev, assistantPlaceholder]);
       setIsTyping(false);
 
-      await streamResponse(res, tempAssistantId, activeSessionId);
+      await streamResponse(res, tempAssistantId, sessionId);
 
       // Refresh session list (title may have changed)
       const sessionsRes = await fetch(`${API_BASE}/api/sessions`, {
@@ -273,7 +278,7 @@ const ChatContainer = () => {
       setMessages([]);
 
       if (firstMessage) {
-        await handleSend(firstMessage);
+        await handleSend(firstMessage, undefined, newSession.id);
       }
     } catch (err) {
       console.error("Create session error:", err);
