@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/hooks/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,6 +22,7 @@ const Auth = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const { refreshAuth } = useAuth();
 
   console.log("Auth component rendered");
   console.log("Current API_URL:", API_URL);
@@ -71,6 +73,7 @@ const Auth = () => {
           : "Welcome to the AI Chatbot.",
       });
 
+      await refreshAuth();
       navigate("/");
     } catch (error: any) {
       let message = error.message;

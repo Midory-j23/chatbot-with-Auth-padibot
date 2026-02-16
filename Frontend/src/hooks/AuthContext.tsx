@@ -1,10 +1,20 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+export interface CurrentUser {
+  id: number;
+  email: string;
+  is_active?: boolean;
+  created_at?: string;
+}
+
 interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
-  logout: () => Promise<void>;          // better to be async
+  user: CurrentUser | null;
+  logout: () => Promise<void>;
   refreshAuth: () => Promise<void>;
 }
 
@@ -13,15 +23,24 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<CurrentUser | null>(null);
 
   const checkAuth = async () => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, {
+      const res = await fetch(`${API_BASE}/me`, {
         credentials: "include",
       });
-      setIsAuthenticated(res.ok);
+      if (res.ok) {
+        const data = await res.json();
+        setIsAuthenticated(true);
+        setUser({ id: data.id, email: data.email, is_active: data.is_active, created_at: data.created_at });
+      } else {
+        setIsAuthenticated(false);
+        setUser(null);
+      }
     } catch {
       setIsAuthenticated(false);
+      setUser(null);
     } finally {
       setIsLoading(false);
     }
@@ -39,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     try {
-      await fetch(`${import.meta.env.VITE_API_URL}/logout`, {
+      await fetch(`${API_BASE}/logout`, {
         method: "POST",
         credentials: "include",
       });
@@ -47,12 +66,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Logout failed:", err);
     } finally {
       setIsAuthenticated(false);
+      setUser(null);
       window.location.href = "/auth";
     }
   };
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, isLoading, logout, refreshAuth }}>
+    <AuthContext.Provider value={{ isAuthenticated, isLoading, user, logout, refreshAuth }}>
       {children}
     </AuthContext.Provider>
   );

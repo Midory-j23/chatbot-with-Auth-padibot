@@ -6,6 +6,7 @@ import ChatInput from "./ChatInput";
 import TypingIndicator from "./TypingIndicator";
 import WelcomeState from "./WelcomeState";
 import ChatSidebar from "./ChatSidebar";
+import { useAuth } from "@/hooks/AuthContext";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 
@@ -24,11 +25,11 @@ type Conversation = {
   updated_at: string;
   last_message_preview?: string;
 };
-const userEmail = "mohammad@example.com";
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const ChatContainer = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [sessions, setSessions] = useState<Conversation[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
@@ -338,7 +339,7 @@ const ChatContainer = () => {
         onDeleteConversation={handleDeleteConversation} // ← no Number()
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
-        userEmail={userEmail}
+        userEmail={user?.email ?? ""}
       />
 
       <div
