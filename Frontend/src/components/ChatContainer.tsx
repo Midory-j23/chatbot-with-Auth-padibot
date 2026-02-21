@@ -294,29 +294,32 @@ const ChatContainer = () => {
     setActiveSessionId(id);
   };
 
-  const handleDeleteConversation = async (id: number) => {
+  const handleDeleteConversation = async (id: number): Promise<void> => {
     try {
       const res = await fetch(`${API_BASE}/api/sessions/${id}`, {
         method: "DELETE",
         credentials: "include",
       });
 
-      if (!res.ok) throw new Error("Delete failed");
+      if (!res.ok) {
+        const msg = res.status === 404 ? "Conversation not found" : "Delete failed";
+        throw new Error(msg);
+      }
 
       setSessions((prev) => prev.filter((s) => s.id !== id));
       if (activeSessionId === id) {
         setActiveSessionId(null);
         setMessages([]);
       }
-
       toast({ title: "Conversation deleted" });
     } catch (err) {
       console.error("Delete error:", err);
       toast({
         title: "Error",
-        description: "Failed to delete conversation",
+        description: err instanceof Error ? err.message : "Failed to delete conversation",
         variant: "destructive",
       });
+      throw err; // rethrow so sidebar can keep dialog open if desired
     }
   };
 

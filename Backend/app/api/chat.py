@@ -185,6 +185,7 @@ def delete_session(
         raise HTTPException(404, "Conversation not found")
 
     db.delete(session)  # cascade deletes messages
+    db.flush()  # ensure DELETE is executed before commit
     db.commit()
     return None
 

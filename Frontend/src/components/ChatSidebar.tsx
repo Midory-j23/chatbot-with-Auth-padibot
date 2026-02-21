@@ -34,7 +34,7 @@ interface ChatSidebarProps {
   activeConversationId: number | null;
   onSelectConversation: (id: number) => void;
   onNewConversation: () => void;
-  onDeleteConversation: (id: number) => void;
+  onDeleteConversation: (id: number) => void | Promise<void>;
   isOpen: boolean;
   onToggle: () => void;
   userEmail?: string; // ← only email passed from parent
@@ -54,6 +54,7 @@ const ChatSidebar = ({
   const [conversationToDelete, setConversationToDelete] = useState<
     number | null
   >(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const filteredConversations = useMemo(() => {
     if (!searchQuery.trim()) return conversations;
@@ -70,10 +71,14 @@ const ChatSidebar = ({
     setConversationToDelete(id);
   };
 
-  const handleConfirmDelete = () => {
-    if (conversationToDelete !== null) {
-      onDeleteConversation(conversationToDelete);
+  const handleConfirmDelete = async () => {
+    if (conversationToDelete === null) return;
+    setIsDeleting(true);
+    try {
+      await Promise.resolve(onDeleteConversation(conversationToDelete));
       setConversationToDelete(null);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -219,12 +224,13 @@ const ChatSidebar = ({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-red-600 hover:bg-red-700 text-white"
               onClick={handleConfirmDelete}
+              disabled={isDeleting}
             >
-              Delete
+              {isDeleting ? "Deleting…" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
