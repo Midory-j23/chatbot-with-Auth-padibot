@@ -43,13 +43,14 @@ def register(
     new_user = create_user(db, user)
     # Log in the new user immediately: set auth cookie so /me returns this user
     access_token = create_access_token(subject=new_user.id)
+    # max_age is in seconds; ACCESS_TOKEN_EXPIRE_MINUTES is minutes
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
         secure=False,
         samesite="lax",
-        max_age=ACCESS_TOKEN_EXPIRE_MINUTES,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES
     )
     return new_user
 
@@ -69,9 +70,9 @@ def login(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False,      
-        samesite="lax",    
-        max_age=ACCESS_TOKEN_EXPIRE_MINUTES,
+        secure=False,
+        samesite="lax",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES
     )
 
     return {"message": "Login successful"}
