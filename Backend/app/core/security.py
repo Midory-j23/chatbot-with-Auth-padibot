@@ -12,13 +12,21 @@ from models.users_mdl import User
 # Change this in production! Use env variable
 SECRET_KEY = "chatbotast123654789chaaaaatboooot"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
+ACCESS_TOKEN_EXPIRE_MINUTES = 60  # JWT validity; cookie is session-only (browser close)
+
+AUTH_COOKIE_NAME = "access_token"
+AUTH_COOKIE_OPTIONS = {
+    "httponly": True,
+    "secure": False,  # set True in production behind HTTPS
+    "samesite": "lax",
+    "path": "/",
+}
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")  # or your login endpoint
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
-    token = request.cookies.get("access_token")
+    token = request.cookies.get(AUTH_COOKIE_NAME)
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated - no token")
 

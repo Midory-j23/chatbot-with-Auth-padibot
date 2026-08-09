@@ -8,9 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ThemeToggle from "./ThemeToggle";
-import { supabase } from "@/integrations/supabase/client";
-import { useNavigate } from "react-router-dom";
-import { toast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/AuthContext";
 
 interface ChatHeaderProps {
   onClearChat: () => void;
@@ -21,23 +19,10 @@ interface ChatHeaderProps {
 }
 
 const ChatHeader = ({ onClearChat, messageCount, onToggleSidebar, isStreaming, onStopStreaming }: ChatHeaderProps) => {
-  const navigate = useNavigate();
+  const { logout } = useAuth();
 
-  const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      toast({
-        title: "Error",
-        description: "Failed to sign out",
-        variant: "destructive",
-      });
-    } else {
-      toast({
-        title: "Signed out",
-        description: "You have been signed out successfully",
-      });
-      navigate("/auth");
-    }
+  const handleLogout = () => {
+    logout();
   };
 
   return (
@@ -55,7 +40,7 @@ const ChatHeader = ({ onClearChat, messageCount, onToggleSidebar, isStreaming, o
           <Bot className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h2 className="font-semibold text-foreground">AI Assistant</h2>
+          <h2 className="font-semibold text-foreground">Padi Bot</h2>
           <p className="text-xs text-muted-foreground">
             {messageCount > 0 ? `${messageCount} messages` : "Online"}
           </p>

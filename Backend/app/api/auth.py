@@ -5,7 +5,14 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.users_mdl import User
 from schemas.users_sch import UserCreate, Token, UserOut
-from core.security import get_current_user, create_access_token, get_password_hash, verify_password, ACCESS_TOKEN_EXPIRE_MINUTES
+from core.security import (
+    get_current_user,
+    create_access_token,
+    get_password_hash,
+    verify_password,
+    AUTH_COOKIE_NAME,
+    AUTH_COOKIE_OPTIONS,
+)
 
 router = APIRouter(tags=["Auth"])
 
@@ -45,12 +52,9 @@ def register(
     access_token = create_access_token(subject=new_user.id)
     # max_age is in seconds; ACCESS_TOKEN_EXPIRE_MINUTES is minutes
     response.set_cookie(
-        key="access_token",
+        key=AUTH_COOKIE_NAME,
         value=access_token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=ACCESS_TOKEN_EXPIRE_MINUTES
+        **AUTH_COOKIE_OPTIONS,
     )
     return new_user
 
@@ -67,12 +71,9 @@ def login(
     access_token = create_access_token(subject=user.id)
 
     response.set_cookie(
-        key="access_token",
+        key=AUTH_COOKIE_NAME,
         value=access_token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=ACCESS_TOKEN_EXPIRE_MINUTES
+        **AUTH_COOKIE_OPTIONS,
     )
 
     return {"message": "Login successful"}
@@ -80,7 +81,7 @@ def login(
 @router.post("/logout")
 def logout(response: Response):
     """Clear the auth cookie so the user is logged out."""
-    response.delete_cookie(key="access_token")
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path=AUTH_COOKIE_OPTIONS["path"])
     return {"message": "Logged out"}
 
 

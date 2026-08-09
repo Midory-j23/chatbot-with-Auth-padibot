@@ -4,18 +4,18 @@ const WelcomeState = () => {
   const features = [
     {
       icon: <Zap className="w-5 h-5" />,
-      title: "Lightning Fast",
-      description: "Get instant responses to your questions",
+      title: "پاسخگویی سریع",
+      description: "در زمان واقعی پاسخگویی به سوالات شما",
     },
     {
       icon: <Shield className="w-5 h-5" />,
-      title: "Secure & Private",
-      description: "Your conversations are protected",
+      title: "امن و خصوصی",
+      description: "گفتگوهای شما محافظت شده اند",
     },
     {
       icon: <Sparkles className="w-5 h-5" />,
-      title: "AI Powered",
-      description: "Advanced language understanding",
+      title: "هوشمند",
+      description: "درک پیشرفته زبان",
     },
   ];
 
@@ -26,12 +26,12 @@ const WelcomeState = () => {
       </div>
       
       <h1 className="text-3xl font-bold mb-2">
-        <span className="text-gradient">Hello!</span>
-        <span className="text-foreground ml-2">How can I help?</span>
+        <span className="text-gradient">سلام! </span>
+        <span className="text-foreground ml-2">چطور میتونم کمکتون کنم؟</span>
       </h1>
       
       <p className="text-muted-foreground text-center max-w-md mb-10">
-        I'm your AI assistant. Ask me anything and I'll do my best to help you out.
+        من دستیار هوشمند پدیسار هستم ،وظیفه من پاسخگویی به سوالات شما و کمک کردن به شماست.
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl w-full">

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -15,7 +15,7 @@ interface AuthContextType {
   isLoading: boolean;
   user: CurrentUser | null;
   logout: () => Promise<void>;
-  refreshAuth: () => Promise<void>;
+  refreshAuth: (options?: { silent?: boolean }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -25,15 +25,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<CurrentUser | null>(null);
 
-  const checkAuth = async () => {
+  const checkAuth = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/me`, {
         credentials: "include",
+        cache: "no-store",
       });
       if (res.ok) {
         const data = await res.json();
         setIsAuthenticated(true);
-        setUser({ id: data.id, email: data.email, is_active: data.is_active, created_at: data.created_at });
+        setUser({
+          id: data.id,
+          email: data.email,
+          is_active: data.is_active,
+          created_at: data.created_at,
+        });
       } else {
         setIsAuthenticated(false);
         setUser(null);
@@ -41,33 +47,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       setIsAuthenticated(false);
       setUser(null);
-    } finally {
+    }
+  }, []);
+
+  const refreshAuth = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsLoading(true);
+    }
+    await checkAuth();
+    if (!options?.silent) {
       setIsLoading(false);
     }
-  };
-
-  const refreshAuth = async () => {
-    setIsLoading(true);
-    await checkAuth();
-    setIsLoading(false);
-  };
+  }, [checkAuth]);
 
   useEffect(() => {
-    checkAuth();
-  }, []);
+    refreshAuth();
+  }, [refreshAuth]);
+
+  // Re-validate when returning via back/forward (bfcache) or refocusing the tab
+  useEffect(() => {
+    const handlePageShow = () => {
+      checkAuth();
+    };
+    const handleFocus = () => {
+      checkAuth();
+    };
+
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [checkAuth]);
 
   const logout = async () => {
     try {
       await fetch(`${API_BASE}/logout`, {
         method: "POST",
         credentials: "include",
+        cache: "no-store",
       });
     } catch (err) {
       console.error("Logout failed:", err);
     } finally {
       setIsAuthenticated(false);
       setUser(null);
-      window.location.href = "/auth";
+      window.location.replace("/auth");
     }
   };
 

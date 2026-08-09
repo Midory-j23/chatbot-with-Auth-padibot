@@ -9,8 +9,16 @@ import { ThemeProvider } from "next-themes";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+import ProtectedRoute from "./components/ProtectedRoute";
 
 const queryClient = new QueryClient();
+
+/** Keep chat mounted across `/` and `/chat/:id` so first-message streams aren't killed. */
+const ChatLayout = () => (
+  <ProtectedRoute>
+    <Index />
+  </ProtectedRoute>
+);
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -21,9 +29,12 @@ const App = () => (
         <AuthProvider>
           <BrowserRouter>
             <Routes>
-              <Route path="*" element={<NotFound />} />
               <Route path="/auth" element={<Auth />} />
-              <Route path="/" element={<Index />} />
+              <Route element={<ChatLayout />}>
+                <Route index element={null} />
+                <Route path="chat/:sessionId" element={null} />
+              </Route>
+              <Route path="*" element={<NotFound />} />
             </Routes>
           </BrowserRouter>
         </AuthProvider>
