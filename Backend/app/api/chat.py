@@ -557,6 +557,7 @@ import httpx
 import json
 import uuid
 import os
+import re
 
 from database import get_db
 from models.users_mdl import User
@@ -576,6 +577,91 @@ OLLAMA_NUM_GPU = int(os.getenv("OLLAMA_NUM_GPU", "0"))
 
 _stream_cancel_events: dict[int, asyncio.Event] = {}
 _stream_generation_ids: dict[int, str] = {}
+
+# Gemma often copies identity tags from the prompt into every reply.
+# Strip that habit from history + live output so chats stay natural.
+_IDENTITY_PREFIX_RE = re.compile(
+    r"^\s*(?:I\s+am\s+(?:Gemma|Qwen)(?:\s*\([^)\n]{0,40}\))?[^.!\n]{0,60}[.!?]\s*)+",
+    re.IGNORECASE,
+)
+_PERSIAN_ARABIC_RE = re.compile(
+    r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]"
+)
+_LATIN_RE = re.compile(r"[A-Za-z]")
+_PREFIX_BUFFER_MAX = 160
+
+
+def _model_identity(model_name: str) -> str:
+    base = (model_name or OLLAMA_MODEL).split(":")[0].lower()
+    if base.startswith("qwen3"):
+        return "Qwen 3"
+    if base.startswith("qwen"):
+        return "Qwen"
+    if base.startswith("gemma3"):
+        return "Gemma 3"
+    if base.startswith("gemma2"):
+        return "Gemma 2"
+    if base.startswith("gemma"):
+        return "Gemma"
+    return base or "Assistant"
+
+
+def _build_system_prompt(identity: str) -> str:
+    # Do not put raw Ollama tags (e.g. model:tag) in the prompt — small models parrot them.
+    return (
+        f"You are a helpful AI assistant powered by {identity}. "
+        "Answer the user's latest message directly and helpfully. "
+        "If older user messages were never answered (for example the user pressed Stop), "
+        "ignore those unfinished requests unless the user asks about them again. "
+        "Never start a reply by introducing yourself. "
+        "Never mention your model name, version, or tag unless the user explicitly asks who you are. "
+        "Always match the language of the user's latest message. "
+        "If the user writes in Persian (Farsi), your entire answer must be in Persian. "
+        "Do not answer in English when the user wrote in Persian."
+    )
+
+
+def _detect_reply_language(text: str) -> Optional[str]:
+    """Return 'Persian' when Persian/Arabic script dominates the user text."""
+    if not text:
+        return None
+    persian = len(_PERSIAN_ARABIC_RE.findall(text))
+    latin = len(_LATIN_RE.findall(text))
+    if persian == 0:
+        return None
+    if persian >= latin:
+        return "Persian"
+    return None
+
+
+def _sanitize_assistant_content(content: str) -> str:
+    """Remove forced identity intros from assistant text used as model context."""
+    cleaned = _IDENTITY_PREFIX_RE.sub("", content or "", count=1)
+    return cleaned.lstrip()
+
+
+def _flush_prefix_buffer(buffer: str) -> str:
+    """Drop a leading identity intro once enough of the reply has arrived."""
+    return _sanitize_assistant_content(buffer)
+
+
+def _should_flush_prefix_buffer(buffer: str) -> bool:
+    """Flush once we can safely strip an intro, or know there isn't one."""
+    if not buffer:
+        return False
+    if len(buffer) >= _PREFIX_BUFFER_MAX or "\n" in buffer:
+        return True
+
+    # Clear non-intro start (e.g. Persian text) — don't delay normal replies
+    if not re.match(r"^\s*I\s+am\b", buffer, flags=re.IGNORECASE):
+        # Wait for a couple of characters so a partial "I" doesn't escape
+        return len(buffer.strip()) >= 2
+
+    # Identity-style start: wait until the first sentence ends and body begins
+    return bool(
+        _IDENTITY_PREFIX_RE.match(buffer)
+        and re.search(r"[.!?]\s+\S", buffer)
+    )
 
 
 def _get_last_message(session_id: int, db: Session) -> Optional[ChatMessage]:
@@ -753,34 +839,12 @@ async def get_conversation_history(
         messages = messages[-max_messages:]
 
     active_model = (model_name or OLLAMA_MODEL).strip() or OLLAMA_MODEL
-    base = active_model.split(":")[0].lower()
-
-    if base.startswith("qwen3"):
-        identity = "Qwen 3"
-    elif base.startswith("qwen"):
-        identity = "Qwen"
-    elif base.startswith("gemma3"):
-        identity = "Gemma 3"
-    elif base.startswith("gemma2"):
-        identity = "Gemma 2"
-    elif base.startswith("gemma"):
-        identity = "Gemma"
-    else:
-        identity = base
+    identity = _model_identity(active_model)
 
     history = [
         {
             "role": "system",
-            "content": (
-                f"You are {identity}, a helpful AI assistant. "
-                "Answer the user's latest message directly and helpfully. "
-                "If older user messages were never answered (for example the user pressed Stop), "
-                "ignore those unfinished requests unless the user asks about them again. "
-                "Do NOT introduce yourself or mention your model name in every reply. "
-                "Only say who you are if the user explicitly asks (e.g. who are you / تو کی هستی). "
-                "Never write raw model tags like gemma3:latest in your answers. "
-                "Reply in the same language the user writes in."
-            ),
+            "content": _build_system_prompt(identity),
         }
     ]
 
@@ -793,6 +857,11 @@ async def get_conversation_history(
         role = "user" if msg.sender == "user" else "assistant"
         if role == "user":
             content = _format_user_message_for_model(content)
+        else:
+            # Keep prior bad intros out of context so the model does not keep mimicking them
+            content = _sanitize_assistant_content(content)
+            if not content:
+                continue
 
         # Merge consecutive same-role messages so Ollama gets a clean turn sequence
         if last_role == role and history and history[-1]["role"] == role:
@@ -810,9 +879,14 @@ async def get_conversation_history(
         last_role = role
 
     if history and history[-1]["role"] == "user":
+        lang = _detect_reply_language(history[-1]["content"])
+        lang_note = ""
+        if lang == "Persian":
+            lang_note = " Reply entirely in Persian (فارسی)."
         history[-1]["content"] += (
             "\n\n(Respond only to the latest user message above. "
-            "Do not restart older interrupted requests.)"
+            "Do not restart older interrupted requests."
+            f"{lang_note})"
         )
 
     return history
@@ -886,6 +960,8 @@ async def send_message_and_stream(
         full_thinking = ""
         cancelled = False
         thinking_phase = True
+        prefix_buffer = ""
+        prefix_checked = False
 
         def is_stale_or_cancelled() -> bool:
             return (
@@ -893,6 +969,16 @@ async def send_message_and_stream(
                 or cancel_event.is_set()
                 or _stream_generation_ids.get(session_id) != generation_id
             )
+
+        def release_prefix_buffer() -> str:
+            nonlocal prefix_buffer, prefix_checked, full_response
+            if prefix_checked:
+                return ""
+            cleaned = _flush_prefix_buffer(prefix_buffer)
+            prefix_buffer = ""
+            prefix_checked = True
+            full_response = cleaned
+            return cleaned
 
         try:
             # Tell the client which model is actually answering
@@ -954,10 +1040,22 @@ async def send_message_and_stream(
                                 if thinking_phase and full_thinking:
                                     thinking_phase = False
                                     yield f"data: [THINK_END]\n\n"
-                                full_response += content_chunk
-                                yield f"data: {content_chunk}\n\n"
+
+                                if not prefix_checked:
+                                    prefix_buffer += content_chunk
+                                    if _should_flush_prefix_buffer(prefix_buffer):
+                                        cleaned = release_prefix_buffer()
+                                        if cleaned:
+                                            yield f"data: {cleaned}\n\n"
+                                else:
+                                    full_response += content_chunk
+                                    yield f"data: {content_chunk}\n\n"
 
                             if chunk_data.get("done", False):
+                                if not prefix_checked and prefix_buffer:
+                                    cleaned = release_prefix_buffer()
+                                    if cleaned:
+                                        yield f"data: {cleaned}\n\n"
                                 break
 
                         except json.JSONDecodeError:
@@ -968,6 +1066,11 @@ async def send_message_and_stream(
                             await response.aclose()
                         except Exception:
                             pass
+
+            if not prefix_checked and prefix_buffer and not cancelled:
+                cleaned = release_prefix_buffer()
+                if cleaned:
+                    yield f"data: {cleaned}\n\n"
 
             if is_stale_or_cancelled() or await request.is_disconnected():
                 cancelled = True
