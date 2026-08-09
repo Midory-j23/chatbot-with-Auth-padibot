@@ -610,9 +610,13 @@ def _build_system_prompt(identity: str) -> str:
     # Do not put raw Ollama tags (e.g. model:tag) in the prompt — small models parrot them.
     return (
         f"You are a helpful AI assistant powered by {identity}. "
-        "Answer the user's latest message directly and helpfully. "
-        "If older user messages were never answered (for example the user pressed Stop), "
-        "ignore those unfinished requests unless the user asks about them again. "
+        "This chat includes earlier turns. Use that conversation history as memory: "
+        "remember the user's name, facts they shared, and prior questions/answers. "
+        "Answer the newest user message using that context when it helps. "
+        "If a marked interrupted earlier request was never finished, do not restart it "
+        "unless the user asks about it again. "
+        "Never claim you have no memory or that you only see the last message — "
+        "you do receive the full conversation history in this session. "
         "Never start a reply by introducing yourself. "
         "Never mention your model name, version, or tag unless the user explicitly asks who you are. "
         "Always match the language of the user's latest message. "
@@ -866,9 +870,10 @@ async def get_conversation_history(
         # Merge consecutive same-role messages so Ollama gets a clean turn sequence
         if last_role == role and history and history[-1]["role"] == role:
             if role == "user":
-                # After Stop, several user lines can stack — mark older ones as interrupted
+                # After Stop, several user lines can stack — keep them, prefer the newest
                 history[-1]["content"] += (
-                    "\n\n(earlier message, may have been interrupted — do not answer unless relevant)\n"
+                    "\n\n(earlier unfinished user message — keep as context; "
+                    "prefer answering the newest request below)\n"
                     + content
                 )
             else:
@@ -884,8 +889,9 @@ async def get_conversation_history(
         if lang == "Persian":
             lang_note = " Reply entirely in Persian (فارسی)."
         history[-1]["content"] += (
-            "\n\n(Respond only to the latest user message above. "
-            "Do not restart older interrupted requests."
+            "\n\n(Focus on this newest user message, but use earlier turns in this chat "
+            "as memory for names, facts, and prior questions. "
+            "Do not restart marked interrupted requests."
             f"{lang_note})"
         )
 
