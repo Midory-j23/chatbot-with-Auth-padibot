@@ -12,7 +12,7 @@ from models.users_mdl import User
 # Change this in production! Use env variable
 SECRET_KEY = "chatbotast123654789chaaaaatboooot"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60  # JWT validity; cookie is session-only (browser close)
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 AUTH_COOKIE_NAME = "access_token"
 AUTH_COOKIE_OPTIONS = {
@@ -20,6 +20,7 @@ AUTH_COOKIE_OPTIONS = {
     "secure": False,  # set True in production behind HTTPS
     "samesite": "lax",
     "path": "/",
+    "max_age": 60 * 60 * 24 * 7,  # 7 days — keep in sync with ACCESS_TOKEN_EXPIRE_MINUTES
 }
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")

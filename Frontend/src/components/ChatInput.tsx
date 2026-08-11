@@ -145,7 +145,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import type { KeyboardEvent } from "react";
-import { Send, Sparkles, ImagePlus, X, ChevronDown, Check, Brain } from "lucide-react";
+import { Send, Sparkles, ImagePlus, X, ChevronDown, Check, Brain, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 
@@ -166,7 +166,9 @@ function formatModelLabel(id: string): string {
   const base = id.replace(/:latest$/, "");
   if (base === "gemma3") return "Gemma 3";
   if (base === "qwen3:4b") return "Qwen 3 4B";
+  if (base === "qwen2.5:4b" || base.startsWith("qwen2.5")) return "Qwen 2.5 4B";
   if (base.startsWith("qwen3")) return "Qwen 3";
+  if (base.startsWith("qwen")) return "Qwen";
   if (base.startsWith("gemma3")) return "Gemma 3";
   return base;
 }
@@ -195,6 +197,8 @@ interface ChatInputProps {
   selectedModelId: string;
   onModelChange: (modelId: string) => void;
   disabled?: boolean;
+  isStreaming?: boolean;
+  onStopStreaming?: () => void;
   replyTo?: {
     content: string;
     isUser: boolean;
@@ -207,6 +211,8 @@ const ChatInput = ({
   selectedModelId,
   onModelChange,
   disabled = false,
+  isStreaming = false,
+  onStopStreaming,
   replyTo = null,
   onCancelReply,
 }: ChatInputProps) => {
@@ -490,19 +496,31 @@ const ChatInput = ({
               )}
             </div>
 
-            {/* Send Button */}
-            <button
-              onClick={handleSend}
-              disabled={(!message.trim() && !image) || disabled}
-              className={cn(
-                "flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center send-btn-hover",
-                (message.trim() || image) && !disabled
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground cursor-not-allowed"
-              )}
-            >
-              <Send className="w-4 h-4" />
-            </button>
+            {/* Send / Stop Button */}
+            {isStreaming && onStopStreaming ? (
+              <button
+                type="button"
+                onClick={onStopStreaming}
+                title="Stop generating"
+                aria-label="Stop generating"
+                className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center bg-foreground text-background hover:opacity-90 transition-opacity"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={(!message.trim() && !image) || disabled}
+                className={cn(
+                  "flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center send-btn-hover",
+                  (message.trim() || image) && !disabled
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground cursor-not-allowed"
+                )}
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 

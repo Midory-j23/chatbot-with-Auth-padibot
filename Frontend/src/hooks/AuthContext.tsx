@@ -1,7 +1,25 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const AUTH_TIMEOUT_MS = 15000;
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = AUTH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
 
 export interface CurrentUser {
   id: number;
@@ -24,10 +42,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<CurrentUser | null>(null);
+  const authInFlightRef = useRef(false);
+  const lastAuthWarnRef = useRef(0);
 
   const checkAuth = useCallback(async () => {
+    if (authInFlightRef.current) return;
+    authInFlightRef.current = true;
     try {
-      const res = await fetch(`${API_BASE}/me`, {
+      const res = await fetchWithTimeout(`${API_BASE}/me`, {
         credentials: "include",
         cache: "no-store",
       });
@@ -44,9 +66,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsAuthenticated(false);
         setUser(null);
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        const now = Date.now();
+        if (now - lastAuthWarnRef.current > 30000) {
+          lastAuthWarnRef.current = now;
+          console.warn("Auth check timed out — is the backend running?");
+        }
+      }
       setIsAuthenticated(false);
       setUser(null);
+    } finally {
+      authInFlightRef.current = false;
     }
   }, []);
 
@@ -54,9 +85,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!options?.silent) {
       setIsLoading(true);
     }
-    await checkAuth();
-    if (!options?.silent) {
-      setIsLoading(false);
+    try {
+      await checkAuth();
+    } finally {
+      if (!options?.silent) {
+        setIsLoading(false);
+      }
     }
   }, [checkAuth]);
 
@@ -64,20 +98,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshAuth();
   }, [refreshAuth]);
 
-  // Re-validate when returning via back/forward (bfcache) or refocusing the tab
+  // Re-validate when returning via back/forward — debounced to avoid request storms
   useEffect(() => {
-    const handlePageShow = () => {
-      checkAuth();
-    };
-    const handleFocus = () => {
-      checkAuth();
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleCheck = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        checkAuth();
+      }, 1500);
     };
 
-    window.addEventListener("pageshow", handlePageShow);
-    window.addEventListener("focus", handleFocus);
+    window.addEventListener("pageshow", scheduleCheck);
+    window.addEventListener("focus", scheduleCheck);
     return () => {
-      window.removeEventListener("pageshow", handlePageShow);
-      window.removeEventListener("focus", handleFocus);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      window.removeEventListener("pageshow", scheduleCheck);
+      window.removeEventListener("focus", scheduleCheck);
     };
   }, [checkAuth]);
 

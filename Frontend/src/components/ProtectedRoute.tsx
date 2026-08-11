@@ -12,11 +12,17 @@ const ProtectedRoute = ({ children }: { children: ReactNode }) => {
     hasAuthedOnce.current = true;
   }
 
-  // Soft re-check on navigation — never flip global loading / unmount chat
+  // Soft re-check on navigation — redirect if session expired
   useEffect(() => {
     if (!hasAuthedOnce.current) return;
     refreshAuth({ silent: true });
   }, [location.pathname, refreshAuth]);
+
+  useEffect(() => {
+    if (hasAuthedOnce.current && !isLoading && !isAuthenticated) {
+      hasAuthedOnce.current = false;
+    }
+  }, [isAuthenticated, isLoading]);
 
   // Only block the first auth check; later path changes keep children mounted
   if (isLoading && !hasAuthedOnce.current) {

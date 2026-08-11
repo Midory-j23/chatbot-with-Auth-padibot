@@ -26,6 +26,7 @@ class SessionSummary(BaseModel):
 
 class SessionDetail(SessionSummary):
     messages: List[MessageOut] = []
+    is_generating: bool = False
 
 
 class SessionCreate(BaseModel):

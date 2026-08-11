@@ -40,6 +40,8 @@ type Conversation = {
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
+const decodeSseChunk = (raw: string) => raw.replace(/\\n/g, "\n");
+
 const ChatContainer = () => {
   const navigate = useNavigate();
   const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
@@ -67,6 +69,152 @@ const ChatContainer = () => {
   const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null);
   const skipMessageReloadRef = useRef(false);
   const sendingSessionIdRef = useRef<number | null>(null);
+  const activeSessionIdRef = useRef<number | null>(null);
+  const streamingSessionIdRef = useRef<number | null>(null);
+  const explicitStopRef = useRef(false);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  const formatMessagesFromApi = useCallback((rawMessages: any[]): Message[] => {
+    return rawMessages.map((m: any) => {
+      const parsed = decodeReplyMessage(m.message ?? "");
+      return {
+        id: m.id,
+        content: parsed.content,
+        isUser: m.sender === "user",
+        created_at: m.created_at,
+        replyTo: parsed.replyTo,
+      };
+    });
+  }, []);
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  const handleUnauthorized = useCallback(() => {
+    toast({
+      title: "Session expired",
+      description: "Please sign in again.",
+      variant: "destructive",
+    });
+    navigate("/auth");
+  }, [navigate]);
+
+  const pollForAssistantReply = useCallback(
+    (sessionId: number) => {
+      stopPolling();
+      let attempts = 0;
+      let lastContent = "";
+      let stableCount = 0;
+
+      const pollOnce = async () => {
+        attempts += 1;
+        if (attempts > 60 || activeSessionIdRef.current !== sessionId) {
+          stopPolling();
+          if (activeSessionIdRef.current === sessionId) {
+            setIsTyping(false);
+            setIsStreaming(false);
+          }
+          return;
+        }
+        try {
+          const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`, {
+            credentials: "include",
+          });
+          if (res.status === 401) {
+            stopPolling();
+            handleUnauthorized();
+            return;
+          }
+          if (!res.ok) return;
+          const data = await res.json();
+          const msgs = data.messages ?? [];
+          const last = msgs[msgs.length - 1];
+          const isGenerating = Boolean(data.is_generating);
+
+          if (msgs.length === 0) {
+            if (!isGenerating && activeSessionIdRef.current === sessionId) {
+              setIsTyping(false);
+              setIsStreaming(false);
+              stopPolling();
+            }
+            return;
+          }
+
+          if (last?.sender === "assistant") {
+            if (streamingSessionIdRef.current === sessionId) {
+              return;
+            }
+            const formatted = formatMessagesFromApi(msgs);
+            const content = formatted[formatted.length - 1]?.content ?? "";
+            if (activeSessionIdRef.current === sessionId) {
+              setMessages(formatted);
+              if (isGenerating || !content.trim()) {
+                setIsTyping(true);
+              } else {
+                setIsTyping(false);
+              }
+            }
+            if (!isGenerating) {
+              if (content === lastContent) {
+                stableCount += 1;
+              } else {
+                stableCount = 0;
+                lastContent = content;
+              }
+              if (stableCount >= 2 && content.trim()) {
+                stopPolling();
+                if (activeSessionIdRef.current === sessionId) {
+                  setIsStreaming(false);
+                  setIsTyping(false);
+                }
+                try {
+                  const sRes = await fetch(`${API_BASE}/api/sessions`, {
+                    credentials: "include",
+                  });
+                  if (sRes.ok) setSessions(await sRes.json());
+                } catch {
+                  // ignore
+                }
+              }
+            } else {
+              stableCount = 0;
+              lastContent = content;
+            }
+          } else if (last?.sender === "user" || isGenerating) {
+            if (activeSessionIdRef.current === sessionId) {
+              setIsStreaming(isGenerating);
+              if (last?.sender === "user") {
+                setMessages((prev) => {
+                  const lastMsg = prev[prev.length - 1];
+                  if (lastMsg && !lastMsg.isUser) return prev;
+                  return [
+                    ...formatMessagesFromApi(msgs),
+                    { id: `pending-${sessionId}`, content: "", isUser: false },
+                  ];
+                });
+              }
+            }
+          }
+        } catch {
+          // keep polling
+        }
+      };
+
+      pollOnce();
+      pollTimerRef.current = setInterval(pollOnce, 2000);
+    },
+    [formatMessagesFromApi, stopPolling, handleUnauthorized],
+  );
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
 
   const handleModelChange = useCallback((modelId: string) => {
     selectedModelRef.current = modelId;
@@ -113,40 +261,70 @@ const ChatContainer = () => {
 
   // Load messages when active session changes
   useEffect(() => {
+    stopPolling();
+
     if (!activeSessionId) {
       if (!skipMessageReloadRef.current) {
         setMessages([]);
       }
+      setIsTyping(false);
+      setIsStreaming(false);
       return;
     }
 
+    const activelySending = sendingSessionIdRef.current === activeSessionId;
+
     // Keep optimistic first-message UI while creating/sending in a new session
-    if (
-      skipMessageReloadRef.current ||
-      sendingSessionIdRef.current === activeSessionId
-    ) {
+    if (skipMessageReloadRef.current || activelySending) {
       skipMessageReloadRef.current = false;
+      if (!activelySending) {
+        setIsTyping(false);
+        setIsStreaming(false);
+      }
       return;
     }
+
+    setIsTyping(false);
+    setIsStreaming(false);
 
     const loadMessages = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/sessions/${activeSessionId}`, {
           credentials: "include",
         });
+        if (res.status === 401) {
+          handleUnauthorized();
+          return;
+        }
         if (!res.ok) throw new Error("Failed to load conversation");
         const data = await res.json();
-        const formatted: Message[] = data.messages.map((m: any) => {
-          const parsed = decodeReplyMessage(m.message ?? "");
-          return {
-            id: m.id,
-            content: parsed.content,
-            isUser: m.sender === "user",
-            created_at: m.created_at,
-            replyTo: parsed.replyTo,
-          };
-        });
-        setMessages(formatted);
+        const formatted = formatMessagesFromApi(data.messages ?? []);
+        const last = formatted[formatted.length - 1];
+        const isGenerating = Boolean(data.is_generating);
+        const awaitingReply =
+          formatted.length > 0 &&
+          (isGenerating ||
+            !!last?.isUser ||
+            (last && !last.isUser && !last.content.trim()));
+
+        if (awaitingReply && last?.isUser) {
+          setMessages([
+            ...formatted,
+            { id: `pending-${activeSessionId}`, content: "", isUser: false },
+          ]);
+          setIsTyping(false);
+          setIsStreaming(isGenerating);
+          pollForAssistantReply(activeSessionId);
+        } else if (awaitingReply) {
+          setMessages(formatted);
+          setIsTyping(false);
+          setIsStreaming(isGenerating);
+          pollForAssistantReply(activeSessionId);
+        } else {
+          setMessages(formatted);
+          setIsTyping(false);
+          setIsStreaming(false);
+        }
         setReplyTo(null);
       } catch (err) {
         console.error("Load messages error:", err);
@@ -154,7 +332,7 @@ const ChatContainer = () => {
       }
     };
     loadMessages();
-  }, [activeSessionId]);
+  }, [activeSessionId, formatMessagesFromApi, pollForAssistantReply, stopPolling, handleUnauthorized]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -162,64 +340,85 @@ const ChatContainer = () => {
 
   useEffect(() => { scrollToBottom(); }, [messages, isTyping, isStreaming, scrollToBottom]);
 
-  const removeIncompleteAssistantFromUi = useCallback((prev: Message[]) => {
-    if (prev.length === 0) return prev;
-    const last = prev[prev.length - 1];
-    if (!last.isUser) {
-      return prev.slice(0, -1);
-    }
-    return prev;
-  }, []);
-
   const refreshSessions = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/sessions`, { credentials: "include" });
+      if (res.status === 401) {
+        navigate("/auth");
+        return;
+      }
       if (res.ok) setSessions(await res.json());
     } catch (err) {
       console.error("Failed to refresh sessions:", err);
     }
   };
 
+  const isStreamInterruptError = (error: unknown) => {
+    if (error instanceof DOMException && error.name === "AbortError") return true;
+    if (error instanceof TypeError) {
+      const msg = error.message.toLowerCase();
+      return msg.includes("input stream") || msg.includes("networkerror");
+    }
+    return false;
+  };
+
   const handleStopStreaming = async () => {
     const sessionId = activeSessionId;
     const stoppedAssistantId = activeAssistantIdRef.current;
-
-    // Invalidate any in-flight stream updates immediately
+    // Hold local refs before any async work so finally in streamResponse can't race them away
+    const reader = streamReaderRef.current;
+    const controller = abortControllerRef.current;
+    explicitStopRef.current = true;
     streamEpochRef.current += 1;
+
+    // Tell backend to hang up Ollama NOW (stops CPU), in parallel with aborting the UI stream
+    const cancelPromise =
+      sessionId != null
+        ? fetch(`${API_BASE}/api/sessions/${sessionId}/cancel`, {
+            method: "POST",
+            credentials: "include",
+            keepalive: true,
+          }).catch((err) => {
+            console.error("Cancel stream error:", err);
+          })
+        : Promise.resolve();
+
     activeAssistantIdRef.current = null;
+    streamingSessionIdRef.current = null;
 
-    // Stop UI stream first so the bubble freezes/disappears instantly
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    streamReaderRef.current?.cancel().catch(() => {});
-    streamReaderRef.current = null;
-
-    setMessages((prev) => {
-      if (stoppedAssistantId) {
-        return prev.filter((m) => m.id !== stoppedAssistantId);
+    if (controller) {
+      controller.abort();
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
       }
-      return removeIncompleteAssistantFromUi(prev);
+    }
+    if (reader) {
+      try {
+        await reader.cancel();
+      } catch {
+        // already closed / raced with streamResponse finally
+      }
+      if (streamReaderRef.current === reader) {
+        streamReaderRef.current = null;
+      }
+    }
+
+    // Keep whatever was already written; only drop a still-empty placeholder bubble.
+    setMessages((prev) => {
+      if (!stoppedAssistantId) return prev;
+      return prev.filter((m) => {
+        if (m.id !== stoppedAssistantId) return true;
+        return Boolean(m.content.trim() || m.thinking?.trim());
+      });
     });
     setIsStreaming(false);
     setIsTyping(false);
 
-    // Then cancel backend generation so it won't save or continue
-    if (sessionId) {
-      try {
-        await fetch(`${API_BASE}/api/sessions/${sessionId}/cancel`, {
-          method: "POST",
-          credentials: "include",
-        });
-      } catch (err) {
-        console.error("Cancel stream error:", err);
-      }
-    }
+    await cancelPromise;
 
     toast({
       title: "Stopped",
-      description: "Generation stopped. Your question was kept — ask again anytime.",
+      description: "Generation stopped. Partial reply was kept.",
     });
   };
 
@@ -228,23 +427,43 @@ const ChatContainer = () => {
     tempMessageId: string,
     signal: AbortSignal,
     epoch: number,
+    streamSessionId: number,
   ): Promise<boolean> => {
     setIsStreaming(true);
+    streamingSessionIdRef.current = streamSessionId;
+    explicitStopRef.current = false;
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
     let fullContent = "";
     let fullThinking = "";
     let wasStopped = false;
 
+    const patchAssistantMessage = () => {
+      patchMessage((m) => ({
+        ...m,
+        content: fullContent,
+        thinking: fullThinking.trim() || undefined,
+      }));
+    };
+
     const isCurrentStream = () =>
       streamEpochRef.current === epoch && !signal.aborted;
 
+    const patchMessage = (updater: (m: Message) => Message) => {
+      if (activeSessionIdRef.current !== streamSessionId) return;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === tempMessageId ? updater(m) : m)),
+      );
+    };
+
     if (!reader) {
       setIsStreaming(false);
+      streamingSessionIdRef.current = null;
       return false;
     }
     streamReaderRef.current = reader;
     activeAssistantIdRef.current = tempMessageId;
+    let lineBuffer = "";
 
     try {
       while (true) {
@@ -259,8 +478,9 @@ const ChatContainer = () => {
           break;
         }
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
+        lineBuffer += decoder.decode(value, { stream: true });
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
@@ -274,66 +494,69 @@ const ChatContainer = () => {
             wasStopped = true;
             break;
           }
-          if (content === "[THINK_END]") continue;
+          if (content === "[THINK_END]") {
+            patchAssistantMessage();
+            continue;
+          }
+          if (content.startsWith("[FINAL]")) {
+            fullContent = decodeSseChunk(content.substring(7));
+            patchAssistantMessage();
+            scrollToBottom();
+            continue;
+          }
           if (content.startsWith("[MODEL]")) {
             const modelName = content.substring(7).trim();
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === tempMessageId ? { ...m, model: modelName } : m,
-              ),
-            );
+            patchMessage((m) => ({ ...m, model: modelName }));
             continue;
           }
           if (content.startsWith("[THINK]")) {
-            fullThinking += content.substring(7);
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === tempMessageId ? { ...m, thinking: fullThinking } : m,
-              ),
-            );
+            fullThinking += decodeSseChunk(content.substring(7));
+            patchAssistantMessage();
             scrollToBottom();
             continue;
           }
           if (content.startsWith("[ERROR]")) {
             console.error("Stream error:", content);
-            fullContent += "خطا رخ داد. لطفاً دوباره تلاش کنید.";
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === tempMessageId ? { ...m, content: fullContent } : m,
-              ),
-            );
+            fullContent = "خطا رخ داد. لطفاً دوباره تلاش کنید.";
+            patchAssistantMessage();
             break;
           }
           if (content) {
-            fullContent += content;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === tempMessageId ? { ...m, content: fullContent } : m,
-              ),
-            );
+            fullContent += decodeSseChunk(content);
+            patchAssistantMessage();
             scrollToBottom();
           }
         }
         if (wasStopped) break;
       }
+      if (lineBuffer.startsWith("data: ") && isCurrentStream() && !wasStopped) {
+        const content = lineBuffer.substring(6);
+        if (content.startsWith("[FINAL]")) {
+          fullContent = decodeSseChunk(content.substring(7));
+          patchAssistantMessage();
+        } else if (content.startsWith("[THINK]")) {
+          fullThinking += decodeSseChunk(content.substring(7));
+          patchAssistantMessage();
+        } else if (content && !content.startsWith("[")) {
+          fullContent += decodeSseChunk(content);
+          patchAssistantMessage();
+        }
+      }
+      patchAssistantMessage();
     } catch (error: unknown) {
       if (
-        error instanceof DOMException &&
-        (error.name === "AbortError" || signal.aborted)
+        isStreamInterruptError(error) ||
+        signal.aborted ||
+        streamEpochRef.current !== epoch
       ) {
-        wasStopped = true;
-      } else if (signal.aborted || streamEpochRef.current !== epoch) {
         wasStopped = true;
       } else {
         console.error("Streaming error:", error);
         if (isCurrentStream()) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === tempMessageId
-                ? { ...m, content: "خطا: دریافت پاسخ ناموفق بود" }
-                : m,
-            ),
-          );
+          patchMessage((m) => ({
+            ...m,
+            content: "خطا: دریافت پاسخ ناموفق بود",
+          }));
         }
       }
     } finally {
@@ -343,15 +566,14 @@ const ChatContainer = () => {
       if (activeAssistantIdRef.current === tempMessageId) {
         activeAssistantIdRef.current = null;
       }
+      if (streamingSessionIdRef.current === streamSessionId) {
+        streamingSessionIdRef.current = null;
+      }
       if (streamEpochRef.current === epoch) {
         setIsStreaming(false);
       }
       scrollToBottom();
-
-      if (wasStopped || streamEpochRef.current !== epoch) {
-        setMessages((prev) => prev.filter((m) => m.id !== tempMessageId));
-        wasStopped = true;
-      }
+      // On Stop: leave the partial assistant message in the thread as-is.
     }
     return wasStopped;
   };
@@ -368,16 +590,12 @@ const ChatContainer = () => {
     const activeReply = replyTo;
     if (!sessionId) { await handleNewConversation(content); return; }
 
-    // If a previous generation is still winding down, cancel it first
-    if (isStreaming || abortControllerRef.current) {
+    // If a previous generation is still winding down in THIS session, cancel it first
+    if ((isStreaming || abortControllerRef.current) && streamingSessionIdRef.current === sessionId) {
+      const prevReader = streamReaderRef.current;
+      const prevController = abortControllerRef.current;
+      explicitStopRef.current = true;
       streamEpochRef.current += 1;
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
-      streamReaderRef.current?.cancel().catch(() => {});
-      streamReaderRef.current = null;
-      activeAssistantIdRef.current = null;
-      setIsStreaming(false);
-      setIsTyping(false);
       try {
         await fetch(`${API_BASE}/api/sessions/${sessionId}/cancel`, {
           method: "POST",
@@ -386,6 +604,23 @@ const ChatContainer = () => {
       } catch {
         // ignore
       }
+      prevController?.abort();
+      if (abortControllerRef.current === prevController) {
+        abortControllerRef.current = null;
+      }
+      if (prevReader) {
+        try {
+          await prevReader.cancel();
+        } catch {
+          // ignore
+        }
+        if (streamReaderRef.current === prevReader) {
+          streamReaderRef.current = null;
+        }
+      }
+      activeAssistantIdRef.current = null;
+      setIsStreaming(false);
+      setIsTyping(false);
     }
 
     sendingSessionIdRef.current = sessionId;
@@ -405,7 +640,15 @@ const ChatContainer = () => {
     };
     setMessages((prev) => [...prev, userMessage]);
     setReplyTo(null);
-    setIsTyping(true);
+
+    const tempAssistantId = `ai-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      { id: tempAssistantId, content: "", isUser: false, model },
+    ]);
+    setIsTyping(false);
+    setIsStreaming(true);
+    streamingSessionIdRef.current = sessionId;
     scrollToBottom();
 
     const epoch = ++streamEpochRef.current;
@@ -431,21 +674,28 @@ const ChatContainer = () => {
         credentials: "include",
         signal,
       });
-      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      if (!res.ok) {
+        if (res.status === 401) {
+          setMessages((prev) => prev.filter((m) => m.id !== tempAssistantId));
+          setIsStreaming(false);
+          handleUnauthorized();
+          return;
+        }
+        throw new Error(`Server error: ${res.status}`);
+      }
 
       if (streamEpochRef.current !== epoch || signal.aborted) {
-        setIsTyping(false);
+        setIsStreaming(false);
         return;
       }
 
-      const tempAssistantId = `ai-${Date.now()}`;
-      setMessages((prev) => [
-        ...prev,
-        { id: tempAssistantId, content: "", isUser: false, model },
-      ]);
-      setIsTyping(false);
-
-      const stopped = await streamResponse(res, tempAssistantId, signal, epoch);
+      const stopped = await streamResponse(
+        res,
+        tempAssistantId,
+        signal,
+        epoch,
+        sessionId,
+      );
       if (abortControllerRef.current?.signal === signal) {
         abortControllerRef.current = null;
       }
@@ -459,6 +709,7 @@ const ChatContainer = () => {
         return;
       }
       console.error("Send message error:", err);
+      setMessages((prev) => prev.filter((m) => m.id !== tempAssistantId));
       setIsTyping(false);
       setIsStreaming(false);
       toast({ title: "خطا", description: "دریافت پاسخ ناموفق بود", variant: "destructive" });
@@ -471,6 +722,12 @@ const ChatContainer = () => {
 
   const handleNewConversation = async (firstMessage?: string) => {
     try {
+      stopPolling();
+      setIsTyping(false);
+      setIsStreaming(false);
+      streamingSessionIdRef.current = null;
+      activeAssistantIdRef.current = null;
+
       const res = await fetch(`${API_BASE}/api/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -501,7 +758,27 @@ const ChatContainer = () => {
     }
   };
 
+  const detachFromStream = () => {
+    streamEpochRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    streamReaderRef.current?.cancel().catch(() => {});
+    streamReaderRef.current = null;
+    activeAssistantIdRef.current = null;
+    streamingSessionIdRef.current = null;
+    setIsStreaming(false);
+    setIsTyping(false);
+  };
+
   const handleSelectConversation = (id: number) => {
+    stopPolling();
+    if (activeSessionId !== id && (isStreaming || abortControllerRef.current)) {
+      // Leave backend generation running; only detach this UI stream
+      detachFromStream();
+    } else if (activeSessionId !== id) {
+      setIsTyping(false);
+      setIsStreaming(false);
+    }
     sendingSessionIdRef.current = null;
     skipMessageReloadRef.current = false;
     navigate(`/chat/${id}`);
@@ -518,6 +795,9 @@ const ChatContainer = () => {
       }
       setSessions((prev) => prev.filter((s) => s.id !== id));
       if (activeSessionId === id) {
+        stopPolling();
+        setIsTyping(false);
+        setIsStreaming(false);
         setActiveSessionId(null);
         setMessages([]);
         navigate("/");
@@ -579,7 +859,7 @@ const ChatContainer = () => {
 
         <div className="flex-1 overflow-y-auto relative">
           <div className="max-w-4xl mx-auto">
-            {messages.length === 0 && !activeSessionId ? (
+            {messages.length === 0 ? (
               <WelcomeState />
             ) : (
               <div className="py-4">
@@ -602,7 +882,7 @@ const ChatContainer = () => {
                     }
                   />
                 ))}
-                {isTyping && <TypingIndicator />}
+                {isTyping && messages.every((m) => m.isUser) && <TypingIndicator />}
                 <div ref={messagesEndRef} />
               </div>
             )}
@@ -611,7 +891,9 @@ const ChatContainer = () => {
 
         <ChatInput
           onSend={(message, image) => handleSend(message, image)}
-          disabled={isTyping || isStreaming}
+          disabled={isStreaming && messages.some((m) => !m.isUser)}
+          isStreaming={isStreaming}
+          onStopStreaming={handleStopStreaming}
           selectedModelId={selectedModelId}
           onModelChange={handleModelChange}
           replyTo={replyTo}

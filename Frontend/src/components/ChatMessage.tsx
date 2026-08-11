@@ -1,10 +1,20 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { Bot, User, Copy, Check, Reply } from "lucide-react";
+import { Bot, User, Copy, Check, Reply, ChevronDown, Brain } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import { truncateQuote } from "@/lib/replyMessage";
 import { getMessageTextAlign, isPersianText } from "@/lib/textDirection";
+
+function formatModelLabel(id: string): string {
+  const base = id.replace(/:latest$/, "");
+  if (base === "gemma3") return "Gemma 3";
+  if (base === "qwen3:4b") return "Qwen 3 4B";
+  if (base.startsWith("qwen3")) return "Qwen 3";
+  if (base.startsWith("qwen")) return "Qwen";
+  if (base.startsWith("gemma3")) return "Gemma 3";
+  return base;
+}
 
 interface ChatMessageProps {
   message: string;
@@ -33,9 +43,27 @@ const ChatMessage = ({
   canReply = false,
 }: ChatMessageProps) => {
   const [copied, setCopied] = useState(false);
+  const [thinkingOpen, setThinkingOpen] = useState(true);
+  const userToggledThinkingRef = useRef(false);
+  const hadAnswerRef = useRef(false);
   const messageAlign = getMessageTextAlign(message);
   const thinkingAlign = getMessageTextAlign(thinking ?? "");
   const replyAlign = replyTo ? getMessageTextAlign(replyTo.content) : messageAlign;
+  const stillThinking = Boolean(thinking && !message);
+
+  useEffect(() => {
+    if (!thinking) {
+      userToggledThinkingRef.current = false;
+      hadAnswerRef.current = false;
+      return;
+    }
+    if (message && !hadAnswerRef.current) {
+      hadAnswerRef.current = true;
+      if (!userToggledThinkingRef.current) {
+        setThinkingOpen(false);
+      }
+    }
+  }, [thinking, message]);
 
   const handleCopy = async () => {
     const textToCopy = thinking
@@ -129,16 +157,46 @@ const ChatMessage = ({
               <div
                 dir={isPersianText(thinking) ? "rtl" : "ltr"}
                 className={cn(
-                  "mb-3 rounded-lg border border-border/60 bg-muted/40 px-3 py-2",
+                  "mb-3 rounded-xl border border-amber-500/30 bg-amber-500/5 overflow-hidden",
                   thinkingAlign
                 )}
               >
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">
-                  Thinking
-                </p>
-                <p className="text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground italic">
-                  {thinking}
-                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    userToggledThinkingRef.current = true;
+                    setThinkingOpen((v) => !v);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-amber-500/10 transition-colors"
+                >
+                  <Brain
+                    className={cn(
+                      "w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0",
+                      stillThinking && "animate-pulse"
+                    )}
+                  />
+                  <span className="text-[11px] font-semibold tracking-wide text-amber-700 dark:text-amber-300 flex-1">
+                    {stillThinking ? "در حال فکر کردن..." : "فرآیند فکر کردن"}
+                  </span>
+                  <ChevronDown
+                    className={cn(
+                      "w-3.5 h-3.5 text-amber-600/80 transition-transform",
+                      thinkingOpen && "rotate-180"
+                    )}
+                  />
+                </button>
+                {thinkingOpen && (
+                  <p className="px-3 pb-2.5 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground italic max-h-48 overflow-y-auto">
+                    {thinking}
+                  </p>
+                )}
+              </div>
+            )}
+            {!message && !thinking && !isUser && (
+              <div className="flex gap-1.5 py-1">
+                <span className="typing-dot w-2 h-2 rounded-full bg-primary" />
+                <span className="typing-dot w-2 h-2 rounded-full bg-primary" />
+                <span className="typing-dot w-2 h-2 rounded-full bg-primary" />
               </div>
             )}
             {message && (
@@ -153,11 +211,13 @@ const ChatMessage = ({
               </p>
             )}
             {!message && thinking && (
-              <p className="text-xs text-muted-foreground animate-pulse">Generating answer...</p>
+              <p className="text-xs text-muted-foreground animate-pulse font-vazir">
+                در حال آماده‌سازی پاسخ...
+              </p>
             )}
             {!isUser && model && (
               <p className="mt-2 text-[10px] text-muted-foreground/80 font-medium tracking-wide">
-                {model}
+                {formatModelLabel(model)}
               </p>
             )}
           </div>
